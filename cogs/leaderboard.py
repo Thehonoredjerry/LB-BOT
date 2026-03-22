@@ -8,6 +8,7 @@ from utils.leaderboard import (
     get_category_for_rank, CATEGORY_RANGES, SECTION_CHOICES, lb_label,
 )
 from utils.roblox import get_roblox_user_id
+from utils.roles import apply_lb_role
 
 LB_CHOICES = [
     app_commands.Choice(name="Top All",    value="all"),
@@ -96,6 +97,14 @@ class Leaderboard(commands.Cog):
             roblox_username, discord_user_id, specific_info, leaderboard, display_name,
         )
 
+        # Auto-role: give role to new player; remove from old player if they were replaced
+        lb_role = await db.get_lb_role(self.pool, str(interaction.guild_id), leaderboard)
+        if lb_role:
+            role_id = lb_role["role_id"]
+            if existing and existing["discord_user_id"] != discord_user_id:
+                await apply_lb_role(self.bot, str(interaction.guild_id), existing["discord_user_id"], role_id, "remove")
+            await apply_lb_role(self.bot, str(interaction.guild_id), discord_user_id, role_id, "add")
+
         await modal.interaction.followup.send(
             f"✅ **#{rank}** (**{display_name}**) set in **{lb_label(leaderboard)}**.", ephemeral=True
         )
@@ -131,6 +140,11 @@ class Leaderboard(commands.Cog):
         username = player["roblox_username"]
         display  = player.get("display_name") or username
         category = get_category_for_rank(rank)
+
+        # Auto-role: remove role from the player being cleared
+        lb_role = await db.get_lb_role(self.pool, guild_id, leaderboard)
+        if lb_role:
+            await apply_lb_role(self.bot, guild_id, player["discord_user_id"], lb_role["role_id"], "remove")
 
         if shift == "shift":
             _, section_end = CATEGORY_RANGES[category]

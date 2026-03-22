@@ -40,6 +40,12 @@ async def create_pool() -> asyncpg.Pool:
                 guild_id TEXT NOT NULL,
                 channel_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS leaderboard_roles (
+                guild_id TEXT NOT NULL,
+                leaderboard TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                PRIMARY KEY (guild_id, leaderboard)
+            );
         """)
     return pool
 
@@ -183,4 +189,26 @@ async def set_audit_log_channel(pool: asyncpg.Pool, guild_id: str, channel_id: s
     await pool.execute("DELETE FROM audit_log_channels WHERE guild_id = $1", guild_id)
     await pool.execute(
         "INSERT INTO audit_log_channels (guild_id, channel_id) VALUES ($1,$2)", guild_id, channel_id
+    )
+
+
+async def get_lb_role(pool: asyncpg.Pool, guild_id: str, leaderboard: str) -> Optional[asyncpg.Record]:
+    return await pool.fetchrow(
+        "SELECT role_id FROM leaderboard_roles WHERE guild_id = $1 AND leaderboard = $2",
+        guild_id, leaderboard,
+    )
+
+
+async def set_lb_role(pool: asyncpg.Pool, guild_id: str, leaderboard: str, role_id: str) -> None:
+    await pool.execute(
+        """INSERT INTO leaderboard_roles (guild_id, leaderboard, role_id) VALUES ($1,$2,$3)
+           ON CONFLICT (guild_id, leaderboard) DO UPDATE SET role_id = EXCLUDED.role_id""",
+        guild_id, leaderboard, role_id,
+    )
+
+
+async def clear_lb_role(pool: asyncpg.Pool, guild_id: str, leaderboard: str) -> None:
+    await pool.execute(
+        "DELETE FROM leaderboard_roles WHERE guild_id = $1 AND leaderboard = $2",
+        guild_id, leaderboard,
     )

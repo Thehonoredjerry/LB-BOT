@@ -180,6 +180,38 @@ class Management(commands.Cog):
             ephemeral=True,
         )
 
+    @app_commands.command(name="set-leaderboard-role", description="Auto-assign a role when players join/leave the leaderboard (owner only)")
+    @app_commands.describe(
+        leaderboard="Which leaderboard this role applies to",
+        role="The role to give/remove automatically (leave blank to disable)",
+    )
+    @app_commands.choices(leaderboard=LB_CHOICES)
+    async def set_leaderboard_role(self, interaction: discord.Interaction, leaderboard: str = "all", role: discord.Role = None):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        guild_id = str(interaction.guild_id)
+
+        if role is None:
+            await db.clear_lb_role(self.pool, guild_id, leaderboard)
+            await interaction.response.send_message(
+                f"✅ Auto-role for **{lb_label(leaderboard)}** has been disabled.",
+                ephemeral=True,
+            )
+        else:
+            await db.set_lb_role(self.pool, guild_id, leaderboard, str(role.id))
+            await interaction.response.send_message(
+                f"✅ Players added to **{lb_label(leaderboard)}** will receive {role.mention}. "
+                f"Players removed will lose it.",
+                ephemeral=True,
+            )
+            await send_audit_log(
+                self.bot, self.pool, guild_id,
+                f"Leaderboard Role Set — {lb_label(leaderboard)}",
+                f"Role: {role.name} ({role.id})",
+                interaction.user,
+            )
+
     @app_commands.command(name="set-cooldown", description="Set a challenge cooldown on a player (whitelist only)")
     @app_commands.describe(rank="The player's rank", days="Cooldown duration in days", leaderboard="Which leaderboard")
     @app_commands.choices(leaderboard=LB_CHOICES)
