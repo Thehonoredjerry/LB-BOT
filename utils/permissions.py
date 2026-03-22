@@ -56,19 +56,23 @@ async def send_audit_log(
     try:
         row = await db.get_audit_log_channel(pool, guild_id)
         if not row:
-            return
-        channel = bot.get_channel(int(row["channel_id"]))
-        if not channel:
-            channel = await bot.fetch_channel(int(row["channel_id"]))
-        if not channel:
+            print(f"[{guild_name}] Audit log: no channel set — use /set-audit-log first")
             return
 
+        channel_id = int(row["channel_id"])
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception as e:
+                print(f"[{guild_name}] Audit log: cannot find channel {channel_id} — {e}")
+                return
+
         embed = discord.Embed(color=0x2B2B31)
-        embed.set_author(
-            name=title,
-            icon_url=bot.user.display_avatar.url,
-        )
+        embed.set_author(name=title, icon_url=bot.user.display_avatar.url)
         embed.description = f"{body}\nBy {user.display_name} ({user.id})"
         await channel.send(embed=embed)
-    except Exception:
-        pass
+    except discord.Forbidden:
+        print(f"[{guild_name}] Audit log: bot lacks permission to send in that channel")
+    except Exception as e:
+        print(f"[{guild_name}] Audit log error: {e}")
