@@ -178,13 +178,13 @@ class Leaderboard(commands.Cog):
         async with self.pool.acquire() as conn:
             if p1:
                 await conn.execute(
-                    "UPDATE players SET rank=$1, updated_at=NOW() WHERE guild_id=$2 AND rank=$3 AND lb_type=$4",
-                    rank2, guild_id, rank1, leaderboard,
+                    "UPDATE players SET rank=$1, updated_at=NOW() WHERE id=$2",
+                    rank2, p1["id"],
                 )
             if p2:
                 await conn.execute(
-                    "UPDATE players SET rank=$1, updated_at=NOW() WHERE guild_id=$2 AND rank=$3 AND lb_type=$4",
-                    rank1, guild_id, rank2, leaderboard,
+                    "UPDATE players SET rank=$1, updated_at=NOW() WHERE id=$2",
+                    rank1, p2["id"],
                 )
 
         n1 = (p1.get("display_name") or p1["roblox_username"]) if p1 else "VACANT"
