@@ -35,9 +35,10 @@ class SetPlayerModal(discord.ui.Modal):
     )
 
     def __init__(self, rank: int, lb_type: str, existing=None):
-        super().__init__(title=f"Set Player #{rank} [{lb_label(lb_type)}]")
-        self.rank    = rank
-        self.lb_type = lb_type
+        super().__init__(title=f"Set Player #{rank} [{lb_label(lb_type)}]", timeout=300)
+        self.rank        = rank
+        self.lb_type     = lb_type
+        self.interaction = None
         if existing:
             self.display_name.default    = existing.get("display_name", "")
             self.roblox_username.default = existing["roblox_username"]
@@ -69,6 +70,13 @@ class Leaderboard(commands.Cog):
         await interaction.response.send_modal(modal)
         await modal.wait()
 
+        # Modal was dismissed or timed out without submitting
+        if modal.interaction is None:
+            return
+
+        # Defer immediately — Roblox API can take >3s and would time out otherwise
+        await modal.interaction.response.defer(ephemeral=True)
+
         display_name    = modal.display_name.value.strip()
         roblox_username = modal.roblox_username.value.strip()
         discord_user_id = modal.discord_user_id.value.strip()
@@ -77,7 +85,7 @@ class Leaderboard(commands.Cog):
         # Validate Roblox username exists
         roblox_id = await get_roblox_user_id(roblox_username)
         if roblox_id is None:
-            await modal.interaction.response.send_message(
+            await modal.interaction.followup.send(
                 f"❌ Roblox username **{roblox_username}** does not exist. Please check the spelling and try again.",
                 ephemeral=True,
             )
@@ -88,7 +96,7 @@ class Leaderboard(commands.Cog):
             roblox_username, discord_user_id, specific_info, leaderboard, display_name,
         )
 
-        await modal.interaction.response.send_message(
+        await modal.interaction.followup.send(
             f"✅ **#{rank}** (**{display_name}**) set in **{lb_label(leaderboard)}**.", ephemeral=True
         )
 

@@ -81,26 +81,53 @@ class Management(commands.Cog):
         try:
             content = await file.read()
             data    = json.loads(content)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Could not read backup file: {e}", ephemeral=True)
+            return
 
+        # Validate the file looks like a real backup before touching anything
+        if "players" not in data and "messages" not in data:
+            await interaction.followup.send("❌ This file doesn't look like a valid backup.", ephemeral=True)
+            return
+
+        # Parse all rows first — catch any bad data before deleting anything
+        try:
+            parsed_players = []
+            for p in data.get("players", []):
+                cooldown_str = p.get("cooldown_expires_at")
+                cooldown = None
+                if cooldown_str:
+                    # Strip timezone suffix if present (e.g. +00:00 or Z) for compatibility
+                    cooldown_str = cooldown_str.split("+")[0].rstrip("Z")
+                    cooldown = datetime.fromisoformat(cooldown_str)
+                parsed_players.append({
+                    "rank": p["rank"], "roblox_username": p["roblox_username"],
+                    "discord_user_id": p["discord_user_id"], "specific_info": p["specific_info"],
+                    "cooldown_expires_at": cooldown, "lb_type": p.get("lb_type", "all"),
+                    "display_name": p.get("display_name", ""),
+                })
+        except Exception as e:
+            await interaction.followup.send(f"❌ Backup file has invalid data: {e}", ephemeral=True)
+            return
+
+        # All data validated — safe to replace
+        try:
             await self.pool.execute("DELETE FROM players WHERE guild_id = $1", guild_id)
             await self.pool.execute("DELETE FROM leaderboard_messages WHERE guild_id = $1", guild_id)
             await self.pool.execute("DELETE FROM whitelist WHERE guild_id = $1", guild_id)
             await self.pool.execute("DELETE FROM audit_log_channels WHERE guild_id = $1", guild_id)
 
-            for p in data.get("players", []):
-                cooldown = datetime.fromisoformat(p["cooldown_expires_at"]) if p.get("cooldown_expires_at") else None
-                lb = p.get("lb_type", "all")
-                dn = p.get("display_name", "")
+            for p in parsed_players:
                 await self.pool.execute(
                     """INSERT INTO players (guild_id, rank, roblox_username, discord_user_id, specific_info, cooldown_expires_at, lb_type, display_name)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
-                    guild_id, p["rank"], p["roblox_username"], p["discord_user_id"], p["specific_info"], cooldown, lb, dn,
+                    guild_id, p["rank"], p["roblox_username"], p["discord_user_id"],
+                    p["specific_info"], p["cooldown_expires_at"], p["lb_type"], p["display_name"],
                 )
             for m in data.get("messages", []):
-                lb = m.get("lb_type", "all")
                 await self.pool.execute(
                     "INSERT INTO leaderboard_messages (guild_id, channel_id, message_id, category, lb_type) VALUES ($1,$2,$3,$4,$5)",
-                    guild_id, m["channel_id"], m["message_id"], m["category"], lb,
+                    guild_id, m["channel_id"], m["message_id"], m["category"], m.get("lb_type", "all"),
                 )
             for w in data.get("whitelist", []):
                 await self.pool.execute(
@@ -119,7 +146,7 @@ class Management(commands.Cog):
                 for cat in ALL_SECTIONS:
                     await update_leaderboard_messages(self.bot, self.pool, guild_id, cat, lb_type)
         except Exception as e:
-            await interaction.followup.send(f"❌ Failed to import backup: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ Import failed mid-way: {e}\nSome data may be missing — re-import your backup.", ephemeral=True)
 
     @app_commands.command(name="set-audit-log", description="Set the channel where all leaderboard changes are logged (owner only)")
     @app_commands.describe(channel="The audit log channel")
