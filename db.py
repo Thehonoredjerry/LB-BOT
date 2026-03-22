@@ -5,7 +5,43 @@ from typing import Optional
 
 
 async def create_pool() -> asyncpg.Pool:
-    return await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS players (
+                id SERIAL PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                roblox_username TEXT NOT NULL,
+                discord_user_id TEXT NOT NULL,
+                specific_info TEXT NOT NULL,
+                cooldown_expires_at TIMESTAMP,
+                display_name TEXT NOT NULL DEFAULT '',
+                lb_type TEXT NOT NULL DEFAULT 'all',
+                created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+                updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS leaderboard_messages (
+                id SERIAL PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '1_10',
+                lb_type TEXT NOT NULL DEFAULT 'all'
+            );
+            CREATE TABLE IF NOT EXISTS whitelist (
+                id SERIAL PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'whitelist'
+            );
+            CREATE TABLE IF NOT EXISTS audit_log_channels (
+                id SERIAL PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL
+            );
+        """)
+    return pool
 
 
 async def get_player(pool: asyncpg.Pool, guild_id: str, rank: int, lb_type: str = "all") -> Optional[asyncpg.Record]:
