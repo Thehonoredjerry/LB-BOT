@@ -228,9 +228,8 @@ class Management(commands.Cog):
                 return
 
             expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-            await db.set_cooldown(self.pool, guild_id, rank, expires_at, leaderboard)
-
-            ts      = int(expires_at.timestamp())
+            ts = int(expires_at.timestamp())
+            await db.set_cooldown(self.pool, guild_id, rank, expires_at.replace(tzinfo=None), leaderboard)
             display = player.get("display_name") or player["roblox_username"]
             await interaction.followup.send(
                 f"✅ Cooldown set on **{display}** (#{rank}) for **{days} day(s)**. Expires <t:{ts}:R>.",
