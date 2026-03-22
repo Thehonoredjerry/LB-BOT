@@ -148,14 +148,37 @@ class Management(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Import failed mid-way: {e}\nSome data may be missing — re-import your backup.", ephemeral=True)
 
-    @app_commands.command(name="set-audit-log", description="Set the channel where all leaderboard changes are logged (owner only)")
-    @app_commands.describe(channel="The audit log channel")
-    async def set_audit_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
+    @app_commands.command(name="set-audit-log", description="Set a channel to receive audit logs — can be in another server (owner only)")
+    @app_commands.describe(
+        channel_id="ID of the channel to send logs to (can be in any server the bot is in)",
+        for_guild="Guild ID whose actions to log (leave blank to use this server)",
+    )
+    async def set_audit_log(self, interaction: discord.Interaction, channel_id: str, for_guild: str = None):
         if not await check_permission(interaction, self.pool, "owner"):
             return
 
-        await db.set_audit_log_channel(self.pool, str(interaction.guild_id), str(channel.id))
-        await interaction.response.send_message(f"✅ Audit log channel set to {channel.mention}.", ephemeral=True)
+        target_guild_id = for_guild.strip() if for_guild else str(interaction.guild_id)
+
+        # Validate the channel exists and the bot can access it
+        try:
+            channel = self.bot.get_channel(int(channel_id))
+            if not channel:
+                channel = await self.bot.fetch_channel(int(channel_id))
+        except Exception:
+            await interaction.response.send_message(
+                "❌ Could not find that channel. Check the ID is correct and the bot is in that server.",
+                ephemeral=True,
+            )
+            return
+
+        await db.set_audit_log_channel(self.pool, target_guild_id, channel_id.strip())
+
+        guild_label = f"server `{target_guild_id}`" if for_guild else "this server"
+        server_name = channel.guild.name if hasattr(channel, "guild") and channel.guild else "Unknown"
+        await interaction.response.send_message(
+            f"✅ Audit logs for **{guild_label}** will now be sent to **#{channel.name}** in **{server_name}**.",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="set-cooldown", description="Set a challenge cooldown on a player (whitelist only)")
     @app_commands.describe(rank="The player's rank", days="Cooldown duration in days", leaderboard="Which leaderboard")
