@@ -26,7 +26,10 @@ def build_player_embed(
     embed.set_image(url=LINE_GIF)
 
     if cooldown_expires_at:
-        now = datetime.utcnow()
+        # Normalise to offset-aware UTC so naive vs aware never causes a comparison error
+        if cooldown_expires_at.tzinfo is None:
+            cooldown_expires_at = cooldown_expires_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         if cooldown_expires_at > now:
             remaining = max(1, (cooldown_expires_at - now).days + 1)
             embed.set_footer(text=f"ติด cooldown {remaining} days")

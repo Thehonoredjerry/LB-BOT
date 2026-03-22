@@ -4,7 +4,7 @@ from discord.ext import commands
 import json
 import io
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import db
 from utils.permissions import check_permission, send_audit_log
 from utils.leaderboard import update_leaderboard_messages, lb_label
@@ -193,7 +193,7 @@ class Management(commands.Cog):
             await interaction.response.send_message(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
             return
 
-        expires_at = datetime.utcnow() + timedelta(days=days)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
         await db.set_cooldown(self.pool, guild_id, rank, expires_at, leaderboard)
 
         ts      = int(expires_at.timestamp())
