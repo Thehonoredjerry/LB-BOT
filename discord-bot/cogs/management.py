@@ -1,0 +1,251 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import json
+import io
+import time
+from datetime import datetime, timedelta
+import db
+from utils.permissions import check_permission, send_audit_log
+from utils.leaderboard import update_leaderboard_messages, lb_label
+
+LB_CHOICES = [
+    app_commands.Choice(name="Top All",    value="all"),
+    app_commands.Choice(name="Top Mobile", value="mobile"),
+]
+
+ALL_SECTIONS = ["1_10", "11_20", "21_30", "31_40", "41_50", "51_60", "61_70", "71_80", "81_90", "91_100"]
+
+
+def get_category_for_rank(rank: int) -> str:
+    start = ((rank - 1) // 10) * 10 + 1
+    end = start + 9
+    return f"{start}_{end}"
+
+
+class Management(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @property
+    def pool(self):
+        return self.bot.pool
+
+    @app_commands.command(name="backup", description="Download a backup of all leaderboard data as a file (owner only)")
+    async def backup(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        players    = await self.pool.fetch("SELECT * FROM players WHERE guild_id = $1", guild_id)
+        messages   = await self.pool.fetch("SELECT * FROM leaderboard_messages WHERE guild_id = $1", guild_id)
+        whitelist  = await db.get_whitelist(self.pool, guild_id)
+        audit_logs = await self.pool.fetch("SELECT * FROM audit_log_channels WHERE guild_id = $1", guild_id)
+
+        def to_dict(record):
+            d = dict(record)
+            for k, v in d.items():
+                if isinstance(v, datetime):
+                    d[k] = v.isoformat()
+            return d
+
+        data = {
+            "guildId":    guild_id,
+            "exportedAt": datetime.utcnow().isoformat(),
+            "players":    [to_dict(p) for p in players],
+            "messages":   [to_dict(m) for m in messages],
+            "whitelist":  [to_dict(w) for w in whitelist],
+            "auditLogs":  [to_dict(a) for a in audit_logs],
+        }
+
+        buf = io.BytesIO(json.dumps(data, indent=2).encode())
+        buf.seek(0)
+        file = discord.File(buf, filename=f"leaderboard-backup-{int(time.time())}.json")
+        await interaction.followup.send("✅ Here is your backup:", file=file, ephemeral=True)
+
+    @app_commands.command(name="import-backup", description="Restore leaderboard data from a backup JSON file (owner only)")
+    @app_commands.describe(file="The backup JSON file")
+    async def import_backup(self, interaction: discord.Interaction, file: discord.Attachment):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        if not file.filename.endswith(".json"):
+            await interaction.response.send_message("❌ Please attach a valid JSON backup file.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        try:
+            content = await file.read()
+            data    = json.loads(content)
+
+            await self.pool.execute("DELETE FROM players WHERE guild_id = $1", guild_id)
+            await self.pool.execute("DELETE FROM leaderboard_messages WHERE guild_id = $1", guild_id)
+            await self.pool.execute("DELETE FROM whitelist WHERE guild_id = $1", guild_id)
+            await self.pool.execute("DELETE FROM audit_log_channels WHERE guild_id = $1", guild_id)
+
+            for p in data.get("players", []):
+                cooldown = datetime.fromisoformat(p["cooldown_expires_at"]) if p.get("cooldown_expires_at") else None
+                lb = p.get("lb_type", "all")
+                dn = p.get("display_name", "")
+                await self.pool.execute(
+                    """INSERT INTO players (guild_id, rank, roblox_username, discord_user_id, specific_info, cooldown_expires_at, lb_type, display_name)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                    guild_id, p["rank"], p["roblox_username"], p["discord_user_id"], p["specific_info"], cooldown, lb, dn,
+                )
+            for m in data.get("messages", []):
+                lb = m.get("lb_type", "all")
+                await self.pool.execute(
+                    "INSERT INTO leaderboard_messages (guild_id, channel_id, message_id, category, lb_type) VALUES ($1,$2,$3,$4,$5)",
+                    guild_id, m["channel_id"], m["message_id"], m["category"], lb,
+                )
+            for w in data.get("whitelist", []):
+                await self.pool.execute(
+                    "INSERT INTO whitelist (guild_id, user_id, role) VALUES ($1,$2,$3)",
+                    guild_id, w["user_id"], w["role"],
+                )
+            for a in data.get("auditLogs", []):
+                await self.pool.execute(
+                    "INSERT INTO audit_log_channels (guild_id, channel_id) VALUES ($1,$2)",
+                    guild_id, a["channel_id"],
+                )
+
+            await interaction.followup.send("✅ Backup imported successfully!", ephemeral=True)
+
+            for lb_type in ["all", "mobile"]:
+                for cat in ALL_SECTIONS:
+                    await update_leaderboard_messages(self.bot, self.pool, guild_id, cat, lb_type)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to import backup: {e}", ephemeral=True)
+
+    @app_commands.command(name="set-audit-log", description="Set the channel where all leaderboard changes are logged (owner only)")
+    @app_commands.describe(channel="The audit log channel")
+    async def set_audit_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        await db.set_audit_log_channel(self.pool, str(interaction.guild_id), str(channel.id))
+        await interaction.response.send_message(f"✅ Audit log channel set to {channel.mention}.", ephemeral=True)
+
+    @app_commands.command(name="set-cooldown", description="Set a challenge cooldown on a player (whitelist only)")
+    @app_commands.describe(rank="The player's rank", days="Cooldown duration in days", leaderboard="Which leaderboard")
+    @app_commands.choices(leaderboard=LB_CHOICES)
+    async def set_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], days: app_commands.Range[int, 1, 365], leaderboard: str = "all"):
+        if not await check_permission(interaction, self.pool, "whitelist"):
+            return
+
+        guild_id = str(interaction.guild_id)
+        player = await db.get_player(self.pool, guild_id, rank, leaderboard)
+        if not player:
+            await interaction.response.send_message(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+            return
+
+        expires_at = datetime.utcnow() + timedelta(days=days)
+        await db.set_cooldown(self.pool, guild_id, rank, expires_at, leaderboard)
+
+        ts      = int(expires_at.timestamp())
+        display = player.get("display_name") or player["roblox_username"]
+        await interaction.response.send_message(
+            f"✅ Cooldown set on **{display}** (#{rank}) for **{days} day(s)**. Expires <t:{ts}:R>.",
+            ephemeral=True,
+        )
+        await send_audit_log(
+            self.bot, self.pool, guild_id,
+            "Cooldown Set",
+            f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown: {days} days (expires <t:{ts}:R>)",
+            interaction.user,
+        )
+
+    @app_commands.command(name="clear-cooldown", description="Remove a player's challenge cooldown early (whitelist only)")
+    @app_commands.describe(rank="The player's rank", leaderboard="Which leaderboard")
+    @app_commands.choices(leaderboard=LB_CHOICES)
+    async def clear_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], leaderboard: str = "all"):
+        if not await check_permission(interaction, self.pool, "whitelist"):
+            return
+
+        guild_id = str(interaction.guild_id)
+        player = await db.get_player(self.pool, guild_id, rank, leaderboard)
+        if not player:
+            await interaction.response.send_message(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+            return
+
+        if not player["cooldown_expires_at"]:
+            await interaction.response.send_message(
+                f"ℹ️ **{player.get('display_name') or player['roblox_username']}** (#{rank}) has no active cooldown.", ephemeral=True
+            )
+            return
+
+        display = player.get("display_name") or player["roblox_username"]
+        await db.set_cooldown(self.pool, guild_id, rank, None, leaderboard)
+        await interaction.response.send_message(f"✅ Cooldown cleared for **{display}** (#{rank}).", ephemeral=True)
+        await send_audit_log(
+            self.bot, self.pool, guild_id,
+            "Cooldown Cleared",
+            f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown removed early.",
+            interaction.user,
+        )
+
+    @app_commands.command(name="season-reset", description="Wipe all players from a leaderboard to start fresh (owner only)")
+    @app_commands.describe(leaderboard="Which leaderboard to reset")
+    @app_commands.choices(leaderboard=LB_CHOICES)
+    async def season_reset(self, interaction: discord.Interaction, leaderboard: str = "all"):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        guild_id = str(interaction.guild_id)
+        await db.delete_all_players(self.pool, guild_id, leaderboard)
+        await interaction.response.send_message(
+            f"✅ All players wiped from **{lb_label(leaderboard)}**. Season reset complete.", ephemeral=True
+        )
+
+        for cat in ALL_SECTIONS:
+            await update_leaderboard_messages(self.bot, self.pool, guild_id, cat, leaderboard)
+        await send_audit_log(
+            self.bot, self.pool, guild_id,
+            f"Season Reset — {lb_label(leaderboard)}",
+            f"All players wiped from {lb_label(leaderboard)}.",
+            interaction.user,
+        )
+
+    @app_commands.command(name="copy-player", description="Copy a player to another rank or leaderboard (owner only)")
+    @app_commands.describe(from_rank="Source rank", to_rank="Destination rank", from_leaderboard="Copy from", to_leaderboard="Copy to (can be different)")
+    @app_commands.choices(from_leaderboard=LB_CHOICES, to_leaderboard=LB_CHOICES)
+    async def copy_player(self, interaction: discord.Interaction, from_rank: app_commands.Range[int, 1, 100], to_rank: app_commands.Range[int, 1, 100], from_leaderboard: str = "all", to_leaderboard: str = "all"):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        guild_id = str(interaction.guild_id)
+        source = await db.get_player(self.pool, guild_id, from_rank, from_leaderboard)
+        if not source:
+            await interaction.response.send_message(
+                f"❌ No player at rank **#{from_rank}** in **{lb_label(from_leaderboard)}**.", ephemeral=True
+            )
+            return
+
+        await db.upsert_player(
+            self.pool, guild_id, to_rank,
+            source["roblox_username"], source["discord_user_id"], source["specific_info"],
+            to_leaderboard, source.get("display_name", ""),
+        )
+        display = source.get("display_name") or source["roblox_username"]
+        cross = f"{lb_label(from_leaderboard)} → {lb_label(to_leaderboard)}" if from_leaderboard != to_leaderboard else lb_label(from_leaderboard)
+        await interaction.response.send_message(
+            f"✅ Copied **{display}** from #{from_rank} → #{to_rank} ({cross}).", ephemeral=True
+        )
+
+        await update_leaderboard_messages(self.bot, self.pool, guild_id, get_category_for_rank(from_rank), from_leaderboard)
+        if to_leaderboard != from_leaderboard or to_rank != from_rank:
+            await update_leaderboard_messages(self.bot, self.pool, guild_id, get_category_for_rank(to_rank), to_leaderboard)
+        await send_audit_log(
+            self.bot, self.pool, guild_id,
+            f"Player Copied — {cross}",
+            f"#{from_rank} → #{to_rank} | {display}",
+            interaction.user,
+        )
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Management(bot))
