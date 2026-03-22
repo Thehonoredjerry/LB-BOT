@@ -5,7 +5,7 @@ from typing import Optional
 
 
 async def create_pool() -> asyncpg.Pool:
-    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], command_timeout=30)
     async with pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS players (

@@ -217,66 +217,74 @@ class Management(commands.Cog):
     @app_commands.choices(leaderboard=LB_CHOICES)
     async def set_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], days: app_commands.Range[int, 1, 365], leaderboard: str = "all"):
         await interaction.response.defer(ephemeral=True)
-        if not await check_permission(interaction, self.pool, "whitelist"):
-            return
+        try:
+            if not await check_permission(interaction, self.pool, "whitelist"):
+                return
 
-        guild_id = str(interaction.guild_id)
-        player = await db.get_player(self.pool, guild_id, rank, leaderboard)
-        if not player:
-            await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
-            return
+            guild_id = str(interaction.guild_id)
+            player = await db.get_player(self.pool, guild_id, rank, leaderboard)
+            if not player:
+                await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+                return
 
-        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-        await db.set_cooldown(self.pool, guild_id, rank, expires_at, leaderboard)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+            await db.set_cooldown(self.pool, guild_id, rank, expires_at, leaderboard)
 
-        ts      = int(expires_at.timestamp())
-        display = player.get("display_name") or player["roblox_username"]
-        await interaction.followup.send(
-            f"✅ Cooldown set on **{display}** (#{rank}) for **{days} day(s)**. Expires <t:{ts}:R>.",
-            ephemeral=True,
-        )
+            ts      = int(expires_at.timestamp())
+            display = player.get("display_name") or player["roblox_username"]
+            await interaction.followup.send(
+                f"✅ Cooldown set on **{display}** (#{rank}) for **{days} day(s)**. Expires <t:{ts}:R>.",
+                ephemeral=True,
+            )
 
-        category = get_category_for_rank(rank)
-        await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
-        await send_audit_log(
-            self.bot, self.pool, guild_id,
-            "Cooldown Set",
-            f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown: {days} days (expires <t:{ts}:R>)",
-            interaction.user,
-        )
+            category = get_category_for_rank(rank)
+            await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
+            await send_audit_log(
+                self.bot, self.pool, guild_id,
+                "Cooldown Set",
+                f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown: {days} days (expires <t:{ts}:R>)",
+                interaction.user,
+            )
+        except Exception as e:
+            print(f"[set-cooldown] Unexpected error: {e}")
+            await interaction.followup.send(f"❌ Something went wrong: `{e}`", ephemeral=True)
 
     @app_commands.command(name="clear-cooldown", description="Remove a player's challenge cooldown early (whitelist only)")
     @app_commands.describe(rank="The player's rank", leaderboard="Which leaderboard")
     @app_commands.choices(leaderboard=LB_CHOICES)
     async def clear_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], leaderboard: str = "all"):
         await interaction.response.defer(ephemeral=True)
-        if not await check_permission(interaction, self.pool, "whitelist"):
-            return
+        try:
+            if not await check_permission(interaction, self.pool, "whitelist"):
+                return
 
-        guild_id = str(interaction.guild_id)
-        player = await db.get_player(self.pool, guild_id, rank, leaderboard)
-        if not player:
-            await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
-            return
+            guild_id = str(interaction.guild_id)
+            player = await db.get_player(self.pool, guild_id, rank, leaderboard)
+            if not player:
+                await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+                return
 
-        if not player["cooldown_expires_at"]:
-            await interaction.followup.send(
-                f"ℹ️ **{player.get('display_name') or player['roblox_username']}** (#{rank}) has no active cooldown.", ephemeral=True
+            if not player["cooldown_expires_at"]:
+                await interaction.followup.send(
+                    f"ℹ️ **{player.get('display_name') or player['roblox_username']}** (#{rank}) has no active cooldown.", ephemeral=True
+                )
+                return
+
+            display = player.get("display_name") or player["roblox_username"]
+            await db.set_cooldown(self.pool, guild_id, rank, None, leaderboard)
+            await interaction.followup.send(f"✅ Cooldown cleared for **{display}** (#{rank}).", ephemeral=True)
+
+            category = get_category_for_rank(rank)
+            await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
+            await send_audit_log(
+                self.bot, self.pool, guild_id,
+                "Cooldown Cleared",
+                f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown removed early.",
+                interaction.user,
             )
-            return
-
-        display = player.get("display_name") or player["roblox_username"]
-        await db.set_cooldown(self.pool, guild_id, rank, None, leaderboard)
-        await interaction.followup.send(f"✅ Cooldown cleared for **{display}** (#{rank}).", ephemeral=True)
-
-        category = get_category_for_rank(rank)
-        await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
-        await send_audit_log(
-            self.bot, self.pool, guild_id,
-            "Cooldown Cleared",
-            f"{lb_label(leaderboard)} #{rank} — {display}\nCooldown removed early.",
-            interaction.user,
-        )
+        except Exception as e:
+            print(f"[clear-cooldown] Unexpected error: {e}")
+            await interaction.followup.send(f"❌ Something went wrong: `{e}`", ephemeral=True)
 
     @app_commands.command(name="season-reset", description="Wipe all players from a leaderboard to start fresh (owner only)")
     @app_commands.describe(leaderboard="Which leaderboard to reset")
