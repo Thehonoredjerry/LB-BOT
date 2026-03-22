@@ -24,18 +24,21 @@ async def check_permission(
 
     entry = await db.get_whitelist_entry(pool, guild_id, user_id)
 
+    async def _deny(msg: str) -> None:
+        """Send an error whether or not the interaction has been deferred."""
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+
     if entry is None:
-        await interaction.response.send_message(
-            "❌ You don't have permission to use this command.", ephemeral=True
-        )
+        await _deny("❌ You don't have permission to use this command.")
         return False
 
     user_role = entry["role"]
 
     if required == "owner" and user_role != "owner":
-        await interaction.response.send_message(
-            "❌ This command is restricted to owners only.", ephemeral=True
-        )
+        await _deny("❌ This command is restricted to owners only.")
         return False
 
     return True

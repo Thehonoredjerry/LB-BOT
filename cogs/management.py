@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 import db
 from utils.permissions import check_permission, send_audit_log
-from utils.leaderboard import update_leaderboard_messages, lb_label
+from utils.leaderboard import update_leaderboard_messages, get_category_for_rank, lb_label
 
 LB_CHOICES = [
     app_commands.Choice(name="Top All",    value="all"),
@@ -216,13 +216,14 @@ class Management(commands.Cog):
     @app_commands.describe(rank="The player's rank", days="Cooldown duration in days", leaderboard="Which leaderboard")
     @app_commands.choices(leaderboard=LB_CHOICES)
     async def set_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], days: app_commands.Range[int, 1, 365], leaderboard: str = "all"):
+        await interaction.response.defer(ephemeral=True)
         if not await check_permission(interaction, self.pool, "whitelist"):
             return
 
         guild_id = str(interaction.guild_id)
         player = await db.get_player(self.pool, guild_id, rank, leaderboard)
         if not player:
-            await interaction.response.send_message(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+            await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
             return
 
         expires_at = datetime.now(timezone.utc) + timedelta(days=days)
@@ -230,10 +231,13 @@ class Management(commands.Cog):
 
         ts      = int(expires_at.timestamp())
         display = player.get("display_name") or player["roblox_username"]
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Cooldown set on **{display}** (#{rank}) for **{days} day(s)**. Expires <t:{ts}:R>.",
             ephemeral=True,
         )
+
+        category = get_category_for_rank(rank)
+        await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
         await send_audit_log(
             self.bot, self.pool, guild_id,
             "Cooldown Set",
@@ -245,24 +249,28 @@ class Management(commands.Cog):
     @app_commands.describe(rank="The player's rank", leaderboard="Which leaderboard")
     @app_commands.choices(leaderboard=LB_CHOICES)
     async def clear_cooldown(self, interaction: discord.Interaction, rank: app_commands.Range[int, 1, 100], leaderboard: str = "all"):
+        await interaction.response.defer(ephemeral=True)
         if not await check_permission(interaction, self.pool, "whitelist"):
             return
 
         guild_id = str(interaction.guild_id)
         player = await db.get_player(self.pool, guild_id, rank, leaderboard)
         if not player:
-            await interaction.response.send_message(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
+            await interaction.followup.send(f"❌ No player at rank **#{rank}** in **{lb_label(leaderboard)}**.", ephemeral=True)
             return
 
         if not player["cooldown_expires_at"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"ℹ️ **{player.get('display_name') or player['roblox_username']}** (#{rank}) has no active cooldown.", ephemeral=True
             )
             return
 
         display = player.get("display_name") or player["roblox_username"]
         await db.set_cooldown(self.pool, guild_id, rank, None, leaderboard)
-        await interaction.response.send_message(f"✅ Cooldown cleared for **{display}** (#{rank}).", ephemeral=True)
+        await interaction.followup.send(f"✅ Cooldown cleared for **{display}** (#{rank}).", ephemeral=True)
+
+        category = get_category_for_rank(rank)
+        await update_leaderboard_messages(self.bot, self.pool, guild_id, category, leaderboard)
         await send_audit_log(
             self.bot, self.pool, guild_id,
             "Cooldown Cleared",
