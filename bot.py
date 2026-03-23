@@ -14,8 +14,12 @@ class LeaderboardBot(commands.Bot):
         self.pool: asyncpg.Pool = None
 
     async def setup_hook(self):
-        self.pool = await db.create_pool()
-        print("[DB] Connected to PostgreSQL")
+        try:
+            self.pool = await db.create_pool()
+            print("[DB] Connected to PostgreSQL")
+        except Exception as e:
+            print(f"[DB] FATAL: Could not connect or create tables — {e}")
+            raise
 
         await self.load_extension("cogs.leaderboard")
         await self.load_extension("cogs.management")
