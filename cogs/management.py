@@ -307,6 +307,42 @@ class Management(commands.Cog):
             interaction.user,
         )
 
+    @app_commands.command(name="debug-guild-ids", description="Show all guild_ids stored in the players table (owner only)")
+    async def debug_guild_ids(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, self.pool, "owner"):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        rows = await self.pool.fetch(
+            "SELECT guild_id, COUNT(*) AS player_count FROM players GROUP BY guild_id ORDER BY player_count DESC"
+        )
+        current_guild_id = str(interaction.guild_id)
+
+        if not rows:
+            await interaction.followup.send(
+                f"**Guild IDs in database:**\n*(none — players table is empty)*\n\n"
+                f"**Current guild:** `{current_guild_id}` (0 players)",
+                ephemeral=True,
+            )
+            return
+
+        lines = ["**Guild IDs in database:**"]
+        current_guild_count = 0
+        for row in rows:
+            gid = row["guild_id"]
+            count = row["player_count"]
+            marker = " ← **this server**" if gid == current_guild_id else ""
+            lines.append(f"- `{gid}`: {count} player(s){marker}")
+            if gid == current_guild_id:
+                current_guild_count = count
+
+        lines.append("")
+        lines.append(f"**Current guild:** `{current_guild_id}` ({current_guild_count} players)")
+
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
     @app_commands.command(name="copy-player", description="Copy a player to another rank or leaderboard (owner only)")
     @app_commands.describe(from_rank="Source rank", to_rank="Destination rank", from_leaderboard="Copy from", to_leaderboard="Copy to (can be different)")
     @app_commands.choices(from_leaderboard=LB_CHOICES, to_leaderboard=LB_CHOICES)
